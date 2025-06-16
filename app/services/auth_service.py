@@ -13,7 +13,7 @@ from app.db.repositories.tenant_repository import TenantRepository
 from app.db.repositories.user_repository import UserRepository
 from app.db.repositories.integration_repository import IntegrationKeyRepository
 from app.schemas.tenant import TenantCreate
-from app.schemas.user import UserCreate, UserCreateWithCognito, UserUpdate
+from app.schemas.user import UserCreate, UserCreateWithCognito, UserUpdate, UserStatusUpdate
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -76,12 +76,20 @@ class AuthService:
             tenant = self.tenant_repo.create(tenant_data)
             
             # Create admin user for this tenant
+            # Extract user_data dict and remove fields that will be explicitly set
+            user_data_dict = user_data.dict()
+            # Remove fields that might cause duplication errors
+            fields_to_remove = ['cognito_id', 'role', 'status', 'tenant_id']
+            for field in fields_to_remove:
+                if field in user_data_dict:
+                    user_data_dict.pop(field)
+                
             user_with_cognito = UserCreateWithCognito(
-                **user_data.dict(),
+                **user_data_dict,
                 cognito_id=cognito_id,
                 tenant_id=tenant.id,
                 role=UserRole.ADMIN,
-                status=UserStatus.ACTIVE
+                status=UserStatus.PENDING_CONFIRMATION
             )
             
             user = self.user_repo.create(user_with_cognito)
@@ -122,9 +130,17 @@ class AuthService:
             if existing_user:
                 return {"error": "User already exists"}
                 
-            # Create user for this tenant
+            # Create user entry in database
+            # Extract user_data dict and remove fields that will be explicitly set
+            user_data_dict = user_data.dict()
+            # Remove fields that might cause duplication errors
+            fields_to_remove = ['cognito_id', 'role', 'status', 'tenant_id']
+            for field in fields_to_remove:
+                if field in user_data_dict:
+                    user_data_dict.pop(field)
+                
             user_with_cognito = UserCreateWithCognito(
-                **user_data.dict(),
+                **user_data_dict,
                 cognito_id=cognito_id,
                 tenant_id=tenant_id
             )
@@ -155,33 +171,27 @@ class AuthService:
         Store encrypted integration tokens for a tenant
         """
         try:
-            # Check if tenant exists
-            tenant = self.tenant_repo.get_by_id(tenant_id)
-            if not tenant:
-                return {"error": "Tenant not found"}
-            
-            # Extract tokens from token data
+            # Extract tokens
             access_token = token_data.get("access_token")
             refresh_token = token_data.get("refresh_token")
             
             if not access_token or not refresh_token:
-                return {"error": "Missing required token data"}
+                return {"error": "Missing required tokens"}
                 
             # Encrypt tokens
             encrypted_access = self._encrypt_token(access_token)
             encrypted_refresh = self._encrypt_token(refresh_token)
             
-            # Store additional data as JSON if needed
-            additional_data = None
-            if len(token_data) > 2:  # If there are more fields than access and refresh tokens
-                # Create a copy without access and refresh token
-                additional = {k: v for k, v in token_data.items() 
-                             if k not in ["access_token", "refresh_token"]}
-                if additional:
-                    additional_data = json.dumps(additional)
-            
-            # Store in database
-            integration_key = self.integration_repo.create(
+            # Extract and store any additional data
+            additional_data = {}
+            for key, value in token_data.items():
+                if key not in ["access_token", "refresh_token"]:
+                    additional_data[key] = value
+                    
+            additional_json = json.dumps(additional_data) if additional_data else None
+                    
+            # Store or update integration key
+            integration_key = self.integration_repo.create_or_update(
                 tenant_id=tenant_id,
                 integration_type=integration_type,
                 access_token=encrypted_access,
@@ -189,11 +199,12 @@ class AuthService:
                 expires_at=expires_at,
                 org_id=org_id,
                 tenant_id_external=tenant_id_external,
-                additional_data=additional_data
+                additional_data=additional_json
             )
             
             return {
-                "integration_id": integration_key.id,
+                "success": True,
+                "tenant_id": tenant_id,
                 "integration_type": integration_key.integration_type,
                 "expires_at": integration_key.expires_at
             }
@@ -272,3 +283,28 @@ class AuthService:
         except Exception as e:
             logger.error(f"Error updating user: {str(e)}")
             return {"error": f"Failed to update user: {str(e)}"}
+
+    async def update_user_status_by_cognito_id(self, cognito_id: str, status_update: UserStatusUpdate) -> Dict[str, Any]:
+        """
+        Update user status by cognito_id
+        This is primarily used for updating a user's status from pending_confirmation to active
+        after they confirm their email address.
+        """
+        try:
+            user = self.user_repo.update_status_by_cognito_id(cognito_id, status_update)
+            if not user:
+                return {"error": "User not found with the provided cognito_id"}
+                
+            return {
+                "success": True,
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "status": user.status,
+                    "tenant_id": user.tenant_id
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error updating user status by cognito_id: {str(e)}")
+            return {"error": f"Failed to update user status: {str(e)}"}

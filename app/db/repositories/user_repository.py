@@ -2,7 +2,7 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 
 from app.db.models import User
-from app.schemas.user import UserCreate, UserCreateWithCognito, UserUpdate
+from app.schemas.user import UserCreate, UserCreateWithCognito, UserUpdate, UserStatusUpdate
 
 
 class UserRepository:
@@ -75,6 +75,38 @@ class UserRepository:
         for key, value in update_dict.items():
             setattr(user, key, value)
                 
+        self.db.commit()
+        self.db.refresh(user)
+        
+        return user
+        
+    def update_by_cognito_id(self, cognito_id: str, update_data: UserUpdate) -> Optional[User]:
+        """
+        Update user by Cognito ID
+        """
+        user = self.get_by_cognito_id(cognito_id)
+        if not user:
+            return None
+            
+        update_dict = update_data.dict(exclude_unset=True)
+        for key, value in update_dict.items():
+            setattr(user, key, value)
+                
+        self.db.commit()
+        self.db.refresh(user)
+        
+        return user
+        
+    def update_status_by_cognito_id(self, cognito_id: str, status_update: UserStatusUpdate) -> Optional[User]:
+        """
+        Update user status by Cognito ID
+        This focused method only updates the status field for security reasons
+        """
+        user = self.get_by_cognito_id(cognito_id)
+        if not user:
+            return None
+            
+        user.status = status_update.status
         self.db.commit()
         self.db.refresh(user)
         

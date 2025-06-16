@@ -26,6 +26,7 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     role: UserRole = UserRole.USER
     status: UserStatus = UserStatus.PENDING_CONFIRMATION
+    cognito_id: Optional[str] = None
 
 
 class UserCreateWithCognito(UserCreate):
@@ -51,6 +52,10 @@ class UserUpdate(BaseModel):
     last_name: Optional[str] = None
     role: Optional[UserRole] = None
     status: Optional[UserStatus] = None
+
+
+class UserStatusUpdate(BaseModel):
+    status: UserStatus
     
     
 class CurrentUser(UserBase):
